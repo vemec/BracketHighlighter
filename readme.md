@@ -1,7 +1,7 @@
 # About
 This is a fork of pyparadigm's SublimeBrackets and SublimeTagmatcher (both are no longer available).  I forked this to fix some issues I had and to add some features I wanted.  I also wanted to improve the efficiency of the matching.  This cuts down on the parallel searching that is now streamlined in one search.  Since then, many new features have been added as well.
 
-![Options Screenshot](https://github.com/facelessuser/BracketHighlighter/raw/master/example.png)
+![Options Screenshot](https://github.com/facelessuser/BracketHighlighter/tree/BH1/example.png)
 
 # Installation
 - Download is available in Package Control or you can [download](https://github.com/facelessuser/BracketHighlighter/zipball/master "download") or clone directly and drop into your Sublime Text 2 packages directory (plugin folder must be named BracketHighlighter)
