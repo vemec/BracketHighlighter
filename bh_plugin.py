@@ -1,10 +1,24 @@
 import sublime
+import sublime_plugin
 from os.path import normpath, join
 import imp
 from collections import namedtuple
 import sys
 import traceback
-import warnings
+import re
+from BracketHighlighter.bh_logging import log
+
+
+class Payload(object):
+    status = False
+    plugin = None
+    args = None
+
+    @classmethod
+    def clear(cls):
+        cls.status = False
+        cls.plugin = None
+        cls.args = None
 
 
 class BracketRegion (namedtuple('BracketRegion', ['begin', 'end'], verbose=False)):
@@ -42,37 +56,63 @@ def is_bracket_region(obj):
     return isinstance(obj, BracketRegion)
 
 
+def sublime_format_path(pth):
+    m = re.match(r"^([A-Za-z]{1}):(?:/|\\)(.*)", pth)
+    if sublime.platform() == "windows" and m is not None:
+        pth = m.group(1) + "/" + m.group(2)
+    return pth.replace("\\", "/")
+
+
+def load_modules(obj, loaded):
+    """
+    Load bracket plugin modules
+    """
+
+    plib = obj.get("plugin_library")
+    if plib is None:
+        return
+
+    try:
+        module = ImportModule.import_module(plib, loaded)
+        obj["compare"] = getattr(module, "compare", None)
+        obj["post_match"] = getattr(module, "post_match", None)
+        obj["validate"] = getattr(module, "validate", None)
+        loaded.add(plib)
+    except:
+        log("Could not load module %s\n%s" % (plib, str(traceback.format_exc())))
+        raise
+
+
 class ImportModule(object):
     @classmethod
     def import_module(cls, module_name, loaded=None):
         # Pull in built-in and custom plugin directory
         if module_name.startswith("bh_modules."):
-            path_name = join(sublime.packages_path(), "BracketHighlighter", normpath(module_name.replace('.', '/')))
+            path_name = join("Packages", "BracketHighlighter", normpath(module_name.replace('.', '/')))
         else:
-            path_name = join(sublime.packages_path(), normpath(module_name.replace('.', '/')))
+            path_name = join("Packages", normpath(module_name.replace('.', '/')))
         path_name += ".py"
         if loaded is not None and module_name in loaded:
             module = sys.modules[module_name]
         else:
-            with warnings.catch_warnings(record=True) as w:
-                # Ignore warnings about plugin folder not being a python package
-                warnings.simplefilter("always")
-                module = imp.new_module(module_name)
-                sys.modules[module_name] = module
-                source = None
-                with open(path_name) as f:
-                    source = f.read().replace('\r', '')
-                cls.__execute_module(source, module_name)
-                w = filter(lambda i: issubclass(i.category, UserWarning), w)
+            module = imp.new_module(module_name)
+            sys.modules[module_name] = module
+            exec(compile(sublime.load_resource(sublime_format_path(path_name)), module_name, 'exec'), sys.modules[module_name].__dict__)
         return module
-
-    @classmethod
-    def __execute_module(cls, source, module_name):
-        exec(compile(source, module_name, 'exec'), sys.modules[module_name].__dict__)
 
     @classmethod
     def import_from(cls, module_name, attribute):
         return getattr(cls.import_module(module_name), attribute)
+
+
+class BracketPluginRunCommand(sublime_plugin.TextCommand):
+    def run(self, edit):
+        try:
+            Payload.args["edit"] = edit
+            Payload.plugin.run(**Payload.args)
+            Payload.status = True
+        except Exception:
+            print("BracketHighlighter: Plugin Run Error:\n%s" % str(traceback.format_exc()))
 
 
 class BracketPlugin(object):
@@ -96,7 +136,7 @@ class BracketPlugin(object):
                 loaded.add(plib)
                 self.enabled = True
             except Exception:
-                print 'BracketHighlighter: Load Plugin Error: %s\n%s' % (plugin['command'], traceback.format_exc())
+                print('BracketHighlighter: Load Plugin Error: %s\n%s' % (plugin['command'], traceback.format_exc()))
 
     def is_enabled(self):
         """
@@ -110,22 +150,24 @@ class BracketPlugin(object):
         Load arguments into plugin and run
         """
 
-        plugin = self.plugin()
-        setattr(plugin, "left", left)
-        setattr(plugin, "right", right)
-        setattr(plugin, "view", view)
-        setattr(plugin, "selection", selection)
-        setattr(plugin, "nobracket", False)
-        edit = view.begin_edit()
-        self.args["edit"] = edit
+        Payload.status = False
+        Payload.plugin = self.plugin()
+        setattr(Payload.plugin, "left", left)
+        setattr(Payload.plugin, "right", right)
+        setattr(Payload.plugin, "view", view)
+        setattr(Payload.plugin, "selection", selection)
+        setattr(Payload.plugin, "nobracket", False)
+        self.args["edit"] = None
         self.args["name"] = name
-        try:
-            nobracket = False
-            plugin.run(**self.args)
-            left, right, selection, nobracket = plugin.left, plugin.right, plugin.selection, plugin.nobracket
-        except Exception:
-            print "BracketHighlighter: Plugin Run Error:\n%s" % str(traceback.format_exc())
-        view.end_edit(edit)
+        Payload.args = self.args
+
+        # Call a TextCommand to run the plugin so it can feed in the Edit object
+        view.run_command("bracket_plugin_run")
+
+        if Payload.status:
+            left, right, selection, nobracket = Payload.plugin.left, Payload.plugin.right, Payload.plugin.selection, Payload.plugin.nobracket
+        Payload.clear()
+
         return left, right, selection, nobracket
 
 
